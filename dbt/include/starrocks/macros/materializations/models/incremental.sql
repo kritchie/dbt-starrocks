@@ -22,11 +22,10 @@
       {% do return(get_dynamic_overwrite_into_sql(arg_dict["target_relation"], arg_dict["temp_relation"], arg_dict["dest_columns"])) %}
 {% endmacro %}
 
-{% macro _get_strategy_sql(target_relation, temp_relation, dest_columns, is_dynamic_overwrite) %}
+{% macro _get_strategy_sql(target_relation, temp_relation, dest_cols_csv, is_dynamic_overwrite) %}
     insert overwrite
         /*+set_var(set dynamic_overwrite = {{ is_dynamic_overwrite }})*/
-        {{ target_relation }}
-        ({{ dest_cols_csv }})
+        {{ target_relation }}({{ dest_cols_csv }})
     (
         select {{ dest_cols_csv }}
         from {{ temp_relation }}

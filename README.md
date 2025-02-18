@@ -142,10 +142,10 @@ Finally, you might use below marco quote
 ```
 
 ## Dynamic Overwrite (StarRocks >= 3.4)
-A new property incremental_strategy that supports the following:
-- `default` (or omitted): Standard inserts.
-- `insert_overwrite`: Will apply `dynamic_overwrite = false` to the inserts.
-- `dynamic_overwrite`: Will apply `dynamic_overwrite = true` to the inserts.
+Add a new `incremental_strategy` property that supports the following values:
+- `default` (or omitted): Standard inserts without `overwrite`.
+- `insert_overwrite`: Will apply `overwrite` with `dynamic_overwrite = false` to the inserts.
+- `dynamic_overwrite`: Will apply `overwrite` with `dynamic_overwrite = true` to the inserts.
 
 For more details on the different behaviors, see [StarRocks' documentation for INSERT](https://docs.starrocks.io/docs/sql-reference/sql-statements/loading_unloading/INSERT).
 

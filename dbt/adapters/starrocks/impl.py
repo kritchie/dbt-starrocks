@@ -180,7 +180,7 @@ class StarRocksAdapter(SQLAdapter):
 
     @override
     def valid_incremental_strategies(self):
-        return ["append", "insert_overwrite", "dynamic_overwrite"]
+        return ["default", "insert_overwrite", "dynamic_overwrite"]
 
 
 def _catalog_filter_schemas(used_schemas: FrozenSet[Tuple[str, str]]) -> Callable[[agate.Row], bool]:

@@ -122,6 +122,22 @@ class TestBaseIncrementalStrategyModel(ABC, BaseIncremental):
         assert len(catalog.nodes) == len(_seeds_row_counts) + 1
 
 
+class TestInvalidOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
+
+    @staticmethod
+    def _get_strategy():
+        return {"+incremental_strategy": "foobar"}
+
+    def _specific_assertions(self, current_project):
+        pass
+
+    def test_incremental(self, project):
+        try:
+            run_dbt(["run"])
+        except AssertionError as ae:
+            assert str(ae) == "dbt exit state did not match expected"
+
+
 class TestEmptyStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
 
     @staticmethod
@@ -154,7 +170,7 @@ class TestInsertOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
         check_relations_equal(current_project.adapter, ["partition_2_base", "incremental"])
 
 
-class TestIDynamicOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
+class TestDynamicOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
 
     @staticmethod
     def _get_strategy():

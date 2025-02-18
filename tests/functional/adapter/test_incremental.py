@@ -1,31 +1,169 @@
-from dbt.context.providers import generate_runtime_model_context
-from dbt.tests.util import get_manifest, run_dbt
 import pytest
 
+from abc import ABC, abstractmethod
 
-@pytest.fixture(scope="class")
-def models():
-    return {"my_model.sql": "select 1 as fun"}
+from dbt.tests.adapter.basic.test_incremental import BaseIncremental
+from dbt.tests.util import run_dbt, check_relations_equal, relation_from_name
+
+partition_1_base_csv = """
+id,partition_key
+1,1
+2,1
+3,1
+4,1
+5,1
+""".lstrip()
+
+partition_1_added_csv = """
+id,partition_key
+6,1
+7,1
+8,1
+9,1
+10,1
+""".lstrip()
+
+partition_2_base_csv = """
+id,partition_key
+11,2
+12,2
+13,2
+14,2
+15,2
+""".lstrip()
+
+full_partition_1_csv = partition_1_base_csv + """
+6,1
+7,1
+8,1
+9,1
+10,1
+""".lstrip()
+
+full_partition_2_csv = full_partition_1_csv + """
+11,2
+12,2
+13,2
+14,2
+15,2
+""".lstrip()
+
+dynamic_partition_2_csv = partition_1_added_csv + """
+11,2
+12,2
+13,2
+14,2
+15,2
+""".lstrip()
+
+class TestBaseIncrementalStrategyModel(ABC, BaseIncremental):
+
+    @staticmethod
+    @abstractmethod
+    def _get_strategy():
+        raise NotImplemented
+
+    @abstractmethod
+    def _specific_assertions(self, current_project):
+        raise NotImplemented
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "example_incremental_model",
+            "models": {
+                "+materialized": "incremental",
+                "+partition_type": "Expr",
+                "+partition_by": ["partition_key"],
+            } | self._get_strategy()
+        }
+
+    @pytest.fixture(scope="class")
+    def seeds(self):
+        return {
+            "partition_1_base.csv": partition_1_base_csv,
+            "partition_1_added.csv": partition_1_added_csv,
+            "partition_2_base.csv": partition_2_base_csv,
+            "full_partition_1.csv": full_partition_1_csv,
+            "full_partition_2.csv": full_partition_2_csv,
+            "dynamic_partition_2.csv": dynamic_partition_2_csv,
+        }
+
+    def test_incremental(self, project):
+
+        _seeds_row_counts = [
+            ("partition_1_base", 5),
+            ("partition_1_added", 5),
+            ("partition_2_base", 5),
+            ("full_partition_1", 10),
+            ("full_partition_2", 15),
+            ("dynamic_partition_2", 10),
+        ]
+
+        # seed command
+        results = run_dbt(["seed"])
+        assert len(results) == len(_seeds_row_counts)
+
+        # Make sure seeds are properly setup
+        for pname, pcount in _seeds_row_counts:
+            relation = relation_from_name(project.adapter, f"{pname}")
+            result = project.run_sql(f"select count(*) as num_rows from {relation}", fetch="one")
+            assert result[0] == pcount
+
+        assert len(run_dbt(["run", "--vars", "seed_name: partition_1_base"])) == 1
+        check_relations_equal(project.adapter, ["partition_1_base", "incremental"])
+
+        assert len(run_dbt(["run", "--vars", "seed_name: partition_1_added"])) == 1
+
+        self._specific_assertions(project)
+
+        # get catalog from docs generate
+        catalog = run_dbt(["docs", "generate"])
+        assert len(catalog.nodes) == len(_seeds_row_counts) + 1
 
 
-@pytest.mark.parametrize("incremental_strategy, target_macro_name", [
-    ("default", "dbt_macro__get_incremental_default_sql"),
-    ("insert_overwrite", "dbt_macro__get_incremental_insert_overwrite_sql"),
-    ("dynamic_overwrite", "dbt_macro__get_incremental_dynamic_overwrite_sql"),
-])
-def test__incremental_strategy_targets_the_right_macro(project, incremental_strategy, target_macro_name):
-    results = run_dbt(["run"])
-    assert len(results) == 1
+class TestEmptyStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
 
-    manifest = get_manifest(project.project_root)
-    model = manifest.nodes["model.test.my_model"]
+    @staticmethod
+    def _get_strategy():
+        return {}
 
-    context = generate_runtime_model_context(
-        model,
-        project.adapter.config,
-        manifest,
-    )
+    def _specific_assertions(self, current_project):
+        check_relations_equal(current_project.adapter, ["full_partition_1", "incremental"])
 
-    macro_func = project.adapter.get_incremental_strategy_macro(context, incremental_strategy)
-    assert macro_func.get_macro().name == target_macro_name
-    assert type(macro_func).__name__ == "MacroGenerator"
+        assert len(run_dbt(["run", "--vars", "seed_name: partition_2_base"])) == 1
+        check_relations_equal(current_project.adapter, ["full_partition_2", "incremental"])
+
+
+class TestDefaultStrategyIncrementalModel(TestEmptyStrategyIncrementalModel):
+    @staticmethod
+    def _get_strategy():
+        return {"+incremental_strategy": "default"}
+
+
+class TestInsertOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
+
+    @staticmethod
+    def _get_strategy():
+        return {"+incremental_strategy": "insert_overwrite"}
+
+    def _specific_assertions(self, current_project):
+        check_relations_equal(current_project.adapter, ["partition_1_added", "incremental"])
+
+        assert len(run_dbt(["run", "--vars", "seed_name: partition_2_base"])) == 1
+        check_relations_equal(current_project.adapter, ["partition_2_base", "incremental"])
+
+
+class TestIDynamicOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
+
+    @staticmethod
+    def _get_strategy():
+        return {"+incremental_strategy": "dynamic_overwrite"}
+
+    def _specific_assertions(self, current_project):
+        check_relations_equal(current_project.adapter, ["partition_1_added", "incremental"])
+
+        results = run_dbt(["run", "--vars", "seed_name: partition_2_base"])
+        assert len(results) == 1
+
+        check_relations_equal(current_project.adapter, ["dynamic_partition_2", "incremental"])

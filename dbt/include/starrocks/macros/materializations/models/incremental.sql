@@ -23,21 +23,19 @@
 {% endmacro %}
 
 {% macro _get_strategy_sql(target_relation, temp_relation, dest_cols_csv, is_dynamic_overwrite) %}
-    insert overwrite
-        /*+set_var(set dynamic_overwrite = {{ is_dynamic_overwrite }})*/
-        {{ target_relation }}({{ dest_cols_csv }})
+    {% set overwrite_type = "/*+SET_VAR(dynamic_overwrite = TRUE)*/" if is_dynamic_overwrite else "/*+SET_VAR(dynamic_overwrite = FALSE)*/" %}
+
+    insert {{ overwrite_type }} overwrite {{ target_relation }}({{ dest_cols_csv }})
     (
         select {{ dest_cols_csv }}
         from {{ temp_relation }}
     )
 {% endmacro %}
 
-
 {% macro get_insert_overwrite_into_sql(target_relation, temp_relation, dest_columns) %}
     {%- set dest_cols_csv = get_quoted_csv(dest_columns | map(attribute="name")) -%}
     {%- do return(_get_strategy_sql(target_relation, temp_relation, dest_cols_csv, false)) -%}
 {% endmacro %}
-
 
 {% macro get_dynamic_overwrite_into_sql(target_relation, temp_relation, dest_columns) %}
     {% if adapter.is_before_version("3.4.0") %}

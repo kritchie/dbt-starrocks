@@ -81,7 +81,7 @@ class TestBaseIncrementalStrategyModel(ABC, BaseIncremental):
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return {
-            "name": "example_incremental_model",
+            "name": "test_incremental",
             "models": {
                 "+materialized": "incremental",
                 "+partition_type": "Expr",

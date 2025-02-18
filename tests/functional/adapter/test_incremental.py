@@ -129,7 +129,7 @@ class TestBaseIncrementalStrategyModel(ABC, BaseIncremental):
         self._doc_tests()
 
 
-class TestInvalidOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
+class TestInvalidStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
 
 
     @staticmethod
@@ -146,7 +146,7 @@ class TestInvalidOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
             assert str(ae) == "dbt exit state did not match expected"
 
 
-class TestEmptyStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
+class TestOmittedStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
 
     @staticmethod
     def _get_strategy():
@@ -159,14 +159,14 @@ class TestEmptyStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
         check_relations_equal(project.adapter, ["full_partition_2", "incremental"])
 
 
-class TestDefaultStrategyIncrementalModel(TestEmptyStrategyIncrementalModel):
+class TestDefaultStrategyIncrementalModel(TestOmittedStrategyIncrementalModel):
 
     @staticmethod
     def _get_strategy():
         return {"+incremental_strategy": "default"}
 
 
-class TestInsertOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
+class TestInsertOverwriteStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
 
     @staticmethod
     def _get_strategy():
@@ -179,7 +179,7 @@ class TestInsertOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
         check_relations_equal(project.adapter, ["partition_2_base", "incremental"])
 
 
-class TestDynamicOverwriteIncrementalModel(TestBaseIncrementalStrategyModel):
+class TestDynamicOverwriteStrategyIncrementalModel(TestBaseIncrementalStrategyModel):
 
     @staticmethod
     def _get_strategy():

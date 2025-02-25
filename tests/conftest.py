@@ -20,4 +20,5 @@ def dbt_profile_target():
 #        'version': '3.0',
 #        'schema': 'dbt',
 #        'ssl_disabled': True
+        'is_async': True
     }

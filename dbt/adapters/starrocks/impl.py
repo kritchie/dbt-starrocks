@@ -125,8 +125,8 @@ class StarRocksAdapter(SQLAdapter):
 
             # Validate status
             status = table[0].get("STATE", "unknown")
-            if status not in ["PENDING", "RUNNING"]:
-                logger.info(f"Task {task_id} completed with status {status}")
+            if status in ["FAILED", "SUCCESS", "MERGED"]:
+                logger.info(f"Task [{task_id}] finished with status [{status}]")
                 return response, table
 
             # Compute next delay
@@ -161,21 +161,13 @@ class StarRocksAdapter(SQLAdapter):
             sql=sql,
         )
 
-        response, table = super().execute(
+        super().execute(
             sql=_submit_sql,
             auto_begin=auto_begin,
             fetch=fetch,
             limit=limit
         )
-
-        if response.code == 'SUCCESS':
-            return self._poll_for_complete_task(_task_id)
-
-        logger.error(
-            f"Error: Could not submit task [{_task_id}]. "
-            f"Reason: failed with response.code: [{response.code}]"
-        )
-        return response, table
+        return self._poll_for_complete_task(_task_id)
 
     @override
     def execute(

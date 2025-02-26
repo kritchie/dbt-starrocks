@@ -78,6 +78,7 @@ starrocks:
 
 More details about setting `use_pure` and other connection arguments [here](https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html)
 
+More details about the use of `is_async` [here](#submittable-etl-tasks)
 
 ## Example
 

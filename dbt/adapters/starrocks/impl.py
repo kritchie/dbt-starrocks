@@ -16,7 +16,7 @@ import re
 import time
 import uuid
 from concurrent.futures import Future
-from typing import Callable, Dict, List, Optional, Set, FrozenSet, Tuple
+from typing import Callable, Dict, List, Optional, Set, FrozenSet, Tuple, TypeAlias
 
 import agate
 import dbt.exceptions
@@ -39,6 +39,12 @@ from dbt.adapters.starrocks.relation import StarRocksRelation
 
 logger = AdapterLogger("starrocks")
 
+SQLQueryResult: TypeAlias = Tuple[AdapterResponse, "agate.Table"]
+
+MAX_POLL_DELAY = 600  # 10 minutes
+SUBMIT_TASK_TEMPLATE = "submit /*+set_var(query_timeout={timeout})*/ task {task_id} as {sql}"
+POLL_TASK_TEMPLATE = "select * from information_schema.task_runs where task_name = '{task_id}'"
+
 class StarRocksConfig(AdapterConfig):
     engine: Optional[str] = None
     table_type: Optional[str] = None  # DUPLICATE/PRIMARY/UNIQUE/AGGREGATE
@@ -59,48 +65,56 @@ class StarRocksAdapter(SQLAdapter):
     @staticmethod
     def _is_submittable_etl(sql: str) -> bool:
         """
-        Evaluates if the SQL statement is a submittable ETL.
+        Evaluates if the SQL statement matches supported StarRocks ETL patterns.
+
+        Supported patterns:
+        - CREATE TABLE ... SELECT
+        - INSERT INTO/OVERWRITE
+        - CACHE SELECT
+
+        Reference: https://docs.starrocks.io/docs/sql-reference/sql-statements/loading_unloading/ETL/SUBMIT_TASK/
 
         :param sql: The SQL statement to evaluate.
         :return: True or False depending on whether the SQL statement is a submittable ETL.
         """
         # Remove newlines and normalize whitespace
-        sql_clean = sql.strip().replace('\n', '') # Remove newlines
-        sql_clean = re.sub(r'\s+', ' ', sql_clean).strip().lower()  # Normalizes whitespaces
+        sql_clean = sql.strip().replace('\n', '')
+        sql_clean = re.sub(r'\s+', ' ', sql_clean).strip().lower()
 
         # Note: # Supported ETL patterns from StarRocks documentation
         # https://docs.starrocks.io/docs/sql-reference/sql-statements/loading_unloading/ETL/SUBMIT_TASK/
         #
         # The goal here is to soft-match the ETL patterns for dbt-generated sql queries.
         # It is not intended to be exhaustive nor to validate SQL statement, this will be left to the engine.
-        patterns = [
+        suitable_etl_patterns = [
             r'^create\s+table.*select',
             r'^insert\s+(into|overwrite)\b',
             r'^cache\s+select\b'
         ]
 
-        return any(re.search(pattern, sql_clean) for pattern in patterns)
+        return any(re.search(pattern, sql_clean) for pattern in suitable_etl_patterns)
 
-    def _poll_for_complete_task(self, task_id: str) -> Tuple[AdapterResponse, "agate.Table"]:
+    def _poll_for_complete_task(self, task_id: str) -> SQLQueryResult:
         """
         Polls for the completion of a task.
 
         :param task_id: The task ID to poll for.
         :return: A tuple of the execution status and polling results.
         """
-        _poll_sql = f"SELECT * FROM information_schema.task_runs WHERE task_name = '{task_id}';"
-        _delay = 60
-        _connection_handle = _c if (_c := self.connections.get_if_exists()) else self.connections.begin()
+        _poll_sql = POLL_TASK_TEMPLATE.format(task_id=task_id)
+        _connection = self.connections.get_if_exists() or self.connections.begin()
+        _attempts = 1
 
         while True:
 
             # Open if needed
-            self.connections.open(_connection_handle)
+            self.connections.open(_connection)
 
             response, table = super().execute(sql=_poll_sql, fetch=True, limit=1)
             if response.code != 'SUCCESS':
                 logger.error(
-                    f"Error: Could not poll task [{task_id}]. Reason: failed with response.code: [{response.code}]"
+                    f"Error: Could not poll task [{task_id}]. "
+                    f"Reason: failed with response.code: [{response.code}]"
                 )
                 return response, table
 
@@ -110,16 +124,58 @@ class StarRocksAdapter(SQLAdapter):
                 return response, table
 
             # Validate status
-            status = table[0]["STATE"]
+            status = table[0].get("STATE", "unknown")
             if status not in ["PENDING", "RUNNING"]:
                 logger.info(f"Task {task_id} completed with status {status}")
                 return response, table
 
-            progress = table[0].get("PROGRESS")
-            logger.info(f"Task {task_id} progress [{progress}]. Waiting {_delay} seconds...")
+            # Compute next delay
+            poll_delay = min(MAX_POLL_DELAY, 2 ** _attempts)
+            _attempts += 1
+
+            progress = table[0].get("PROGRESS", "unknown")
+            logger.info(f"Task {task_id} progress [{progress}]. Waiting {poll_delay} seconds...")
+
             # Close connection before sleeping to avoid stale connections
-            self.connections.close(_connection_handle)
-            time.sleep(_delay)
+            self.connections.close(_connection)
+            time.sleep(poll_delay)
+
+    def _execute_async_task(self, sql: str, auto_begin: bool = False, fetch: bool = False, limit: Optional[int] = None) -> SQLQueryResult:
+        """
+        Executes an SQL statement asynchronously and wait for completion.
+
+        :param str sql: The sql to execute.
+        :param bool auto_begin: If set, and dbt is not currently inside a
+            transaction, automatically begin one.
+        :param bool fetch: If set, fetch results.
+        :param Optional[int] limit: If set, only fetch n number of rows
+        :return: A tuple of the query status and results (empty if fetch=False).
+        :rtype: Tuple[AdapterResponse, "agate.Table"]
+        """
+        _task_id = str(uuid.uuid4()).replace('-', '')
+        _timeout = self.config.credentials.async_query_timeout
+
+        _submit_sql = SUBMIT_TASK_TEMPLATE.format(
+            timeout=_timeout,
+            task_id=_task_id,
+            sql=sql,
+        )
+
+        response, table = super().execute(
+            sql=_submit_sql,
+            auto_begin=auto_begin,
+            fetch=fetch,
+            limit=limit
+        )
+
+        if response.code == 'SUCCESS':
+            return self._poll_for_complete_task(_task_id)
+
+        logger.error(
+            f"Error: Could not submit task [{_task_id}]. "
+            f"Reason: failed with response.code: [{response.code}]"
+        )
+        return response, table
 
     @override
     def execute(
@@ -128,7 +184,7 @@ class StarRocksAdapter(SQLAdapter):
         auto_begin: bool = False,
         fetch: bool = False,
         limit: Optional[int] = None,
-    ) -> Tuple[AdapterResponse, "agate.Table"]:
+    ) -> SQLQueryResult:
         """
         Execute a SQL statement against the database.
 
@@ -146,24 +202,9 @@ class StarRocksAdapter(SQLAdapter):
         :return: A tuple of the query status and results (empty if fetch=False).
         :rtype: Tuple[AdapterResponse, "agate.Table"]
         """
-        _is_async = self.config.credentials.is_async
-        _async_query_timeout = self.config.credentials.async_query_timeout
-        if _is_async and self._is_submittable_etl(sql):
-
-            _task_id = str(uuid.uuid4()).replace('-', '')
-            _submit_sql = f"submit /*+set_var(query_timeout={_async_query_timeout})*/ task {_task_id} as {sql}"
-            response, table = super().execute(sql=_submit_sql, auto_begin=auto_begin, fetch=fetch, limit=limit)
-
-            if response.code == 'SUCCESS':
-                return self._poll_for_complete_task(_task_id)
-            else:
-                logger.error(
-                    f"Error: Could not submit task [{_task_id}]. Reason: failed with response.code: [{response.code}]"
-                )
-                return response, table
-
-        else:
+        if not self.config.credentials.is_async or not self._is_submittable_etl(sql):
             return super().execute(sql=sql, auto_begin=auto_begin, fetch=fetch, limit=limit)
+        return self._execute_async_task(sql=sql, auto_begin=auto_begin, fetch=fetch, limit=limit)
 
     @classmethod
     def date_function(cls) -> str:

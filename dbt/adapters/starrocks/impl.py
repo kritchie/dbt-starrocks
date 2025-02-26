@@ -110,6 +110,7 @@ class StarRocksAdapter(SQLAdapter):
             # Open if needed
             self.connections.open(_connection)
 
+            # Get the status from task_runs
             response, table = super().execute(sql=_poll_sql, fetch=True, limit=1)
             if response.code != 'SUCCESS':
                 logger.error(
@@ -133,6 +134,7 @@ class StarRocksAdapter(SQLAdapter):
             poll_delay = min(MAX_POLL_DELAY, 2 ** _attempts)
             _attempts += 1
 
+            # Notify end user
             progress = table[0].get("PROGRESS", "unknown")
             logger.info(f"Task {task_id} progress [{progress}]. Waiting {poll_delay} seconds...")
 

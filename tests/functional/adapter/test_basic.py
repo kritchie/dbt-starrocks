@@ -48,7 +48,6 @@ PROPERTIES (
 );
 """.replace("\n", "").replace(" ", "")
 
-
 # StarRocks doesn't support materialization from table to view https://github.com/StarRocks/dbt-starrocks/issues/33
 class TestSimpleMaterializationsMyAdapter(BaseSimpleMaterializations):
 

@@ -34,6 +34,11 @@ from typing_extensions import override
 
 from dbt.adapters.starrocks.column import StarRocksColumn
 from dbt.adapters.starrocks.connections import StarRocksConnectionManager
+from dbt.adapters.starrocks.helpers.pre_create import (
+    PreCreateSQLHandler,
+    create_pre_create_handler,
+    is_pre_creatable,
+)
 from dbt.adapters.starrocks.relation import StarRocksRelation
 
 
@@ -147,7 +152,14 @@ class StarRocksAdapter(SQLAdapter):
             self.connections.close(_connection)
             time.sleep(poll_delay)
 
-    def _execute_async_task(self, sql: str, auto_begin: bool = False, fetch: bool = False, limit: Optional[int] = None) -> SQLQueryResult:
+    def _execute_async_task(
+            self,
+            sql: str,
+            auto_begin: bool = False,
+            fetch: bool = False,
+            limit: Optional[int] = None,
+            pre_create_handler: Optional[PreCreateSQLHandler] = None
+    ) -> SQLQueryResult:
         """
         Executes an SQL statement asynchronously and wait for completion.
 
@@ -162,11 +174,27 @@ class StarRocksAdapter(SQLAdapter):
         _task_id = str(uuid.uuid4()).replace('-', '')
         _timeout = self.config.credentials.async_query_timeout
 
-        _submit_sql = SUBMIT_TASK_TEMPLATE.format(
-            timeout=_timeout,
-            task_id=_task_id,
-            sql=sql,
-        )
+        if pre_create_handler:
+            logger.info(f"Pre-creating table `{pre_create_handler.db_name}`.`{pre_create_handler.table_name}`...")
+            super().execute(
+                sql=pre_create_handler.create_statement,
+                auto_begin=auto_begin,
+                fetch=fetch,
+                limit=limit
+            )
+
+            _submit_sql = SUBMIT_TASK_TEMPLATE.format(
+                timeout=_timeout,
+                task_id=_task_id,
+                sql=pre_create_handler.insert_statement,
+            )
+        else:
+            # No pre-create, execute as usual
+            _submit_sql = SUBMIT_TASK_TEMPLATE.format(
+                timeout=_timeout,
+                task_id=_task_id,
+                sql=sql,
+            )
 
         super().execute(
             sql=_submit_sql,
@@ -201,9 +229,31 @@ class StarRocksAdapter(SQLAdapter):
         :return: A tuple of the query status and results (empty if fetch=False).
         :rtype: Tuple[AdapterResponse, "agate.Table"]
         """
+        pc_handler = create_pre_create_handler(
+            sql=sql,
+            project_root=self.config.project_root,
+            model_paths=self.config.model_paths,
+            models=self.config.models,
+        ) if is_pre_creatable(sql=sql) else None
+
         if not self.config.credentials.is_async or not self._is_submittable_etl(sql):
-            return super().execute(sql=sql, auto_begin=auto_begin, fetch=fetch, limit=limit)
-        return self._execute_async_task(sql=sql, auto_begin=auto_begin, fetch=fetch, limit=limit)
+            # Sync process
+            if pc_handler:
+                # Create table and Insert separated in 2 steps.
+                super().execute(sql=pc_handler.create_statement, auto_begin=auto_begin, fetch=fetch, limit=limit)
+                return super().execute(sql=pc_handler.insert_statement, auto_begin=auto_begin, fetch=fetch, limit=limit)
+
+            else:
+                return super().execute(sql=sql, auto_begin=auto_begin, fetch=fetch, limit=limit)
+
+        # Async process
+        return self._execute_async_task(
+            sql=sql,
+            auto_begin=auto_begin,
+            fetch=fetch,
+            limit=limit,
+            pre_create_handler=pc_handler
+        )
 
     @classmethod
     def date_function(cls) -> str:

@@ -1,9 +1,9 @@
 import dataclasses
-import os
+import pathlib
 import re
 from typing import Optional
 
-import dbt
+from dbt.exceptions import DbtRuntimeError
 
 
 PRE_CREATE_CONFIG_TAG = "+pre_create"
@@ -28,9 +28,12 @@ class PreCreateSQLHandler:
     @staticmethod
     def _get_relations_from_sql(sql: str) -> tuple[str, str]:
         """
+        Extracts relation names from a SQL statement.
 
-        :param sql:
-        :return:
+        Assumes standard relations using backtick symbol "`"
+
+        :param sql: The SQL statement to process.
+        :return: A tuple of relation objects (usually db name, table name)
         """
         # Remove leading whitespaces and newlines
         cleaned_string = ''.join(sql.split())
@@ -49,74 +52,98 @@ class PreCreateSQLHandler:
         self.db_name, self.table_name = self._get_relations_from_sql(self.raw_sql_statement)
 
 
-def load_create_table_statement(project_root: str, model_paths: list[str], model_name: str) -> str:
+def load_create_table_statement(project_root: str, model_paths: list[str], model_file: str) -> str:
     """
+    Loads the `CREATE TABLE` SQL statement from a predefined file.
 
-    :param project_root:
-    :param model_paths:
-    :param model_name:
-    :return:
+    This function searches for a `.sql` file containing only the table creation statement
+    (without table properties) for a specific dbt model. The file must follow a specific
+    naming convention and reside within one of the configured model paths.
+
+    Example of expected SQL content in the file:
+
+        CREATE TABLE my_table (
+            col1 VARCHAR(24),
+            col2 INT,
+            col3 INT AUTO_INCREMENT
+        )
+
+    **Note:** Only include the table creation statement without any additional properties
+    like table options.
+
+    :param project_root: The root directory of the dbt project.
+    :param model_paths: A list of paths (relative to the project root) where dbt models are located.
+    :param model_file: The filename of the dbt model for which to load the pre-create SQL statement.
+    :return: The SQL query loaded from the file.
+    :raises dbt.exceptions.DbtRuntimeError: If no matching SQL file is found.
     """
     for mp in model_paths:
-        _fp = os.path.join(project_root, mp, PRE_CREATE_MODEL_DIR, f"{PRE_CREATE_TEMPLATE_PREFIX}{model_name}")
-        if os.path.exists(_fp):
-            with open(_fp, "r") as f_in:
-                return f_in.read()
-    raise dbt.exceptions.DbtRuntimeError(
-        f"Could not find table pre-creation SQL code for the following configuration: "
-        f"project_root=[{project_root}], model_paths=[{model_paths}], model_name=[{model_name}]"
+        _fp = pathlib.Path(project_root) / mp / PRE_CREATE_MODEL_DIR / f"{PRE_CREATE_TEMPLATE_PREFIX}{model_file}"
+        if _fp.exists():
+            return _fp.read_text()
+    raise DbtRuntimeError(
+        "Could not find table pre-creation SQL code for the following configuration: "
+        f"project_root=[{project_root}], model_paths=[{model_paths}], model_file=[{model_file}]"
     )
 
 
 def is_pre_creatable(sql: str) -> bool:
     """
+    Evaluates if the SQL string is suitable for pre-creation.
 
-    :param sql:
-    :return:
+    :param sql: The SQL statement to process.
+    :return: True if the SQL contains a pre-creatable statement.
     """
     # Remove newlines and normalize whitespace
     sql_clean = sql.strip().replace('\n', '')
     sql_clean = re.sub(r'\s+', ' ', sql_clean).strip().lower()
 
-    # TODO : Docs
-    suitable_etl_patterns = [
-        r'^create\s+table.*select',
-    ]
+    # Note: # Pre-Creatable statements are only CREATE TABLE ... AS SELECT
+    # https://docs.starrocks.io/docs/sql-reference/sql-statements/table_bucket_part_index/CREATE_TABLE_AS_SELECT/
+    #
+    # The goal here is to soft-match the pattern for dbt-generated sql queries.
+    # It is not intended to be exhaustive nor to validate SQL statement, this will be left to the engine.
+    pre_create_pattern = r'^create\s+table.*select'
+    return bool(re.search(pre_create_pattern, sql_clean))
 
-    return any(re.search(pattern, sql_clean) for pattern in suitable_etl_patterns)
 
-
-def create_pre_create_handler(
-        sql: str,
-        project_root: str,
-        model_paths: list[str],
-        models: dict,
+def create_handler(
+    sql: str,
+    project_root: str,
+    model_paths: list[str],
+    models: dict,
 ) -> PreCreateSQLHandler:
     """
+    Creates a SQL handler for pre-create operations.
 
-    :param sql:
-    :return:
+    :param sql: The raw SQL statement to process.
+    :param project_root: The root directory of the dbt project.
+    :param model_paths: A list of paths (relative to the project root) where dbt models are located.
+    :param models: The configuration object of the dbt models.
+    :return: Configured PreCreateSQLHandler instance.
     """
+    # Parse the SQL
     handler = PreCreateSQLHandler(raw_sql_statement=sql)
+    _relation = f"`{handler.db_name}`.`{handler.table_name}`"
+    _clean_split = handler.raw_sql_statement.replace("\n", "").split("as select")
+    if len(_clean_split) != 2:
+        raise ValueError("Invalid SQL structure - missing `as select` clause")
 
     # Prepare the SQL queries
     _create_statement = load_create_table_statement(
         project_root=project_root,
         model_paths=model_paths,
-        model_name=f"{handler.model_name}.sql"
+        model_file=f"{handler.model_name}.sql"
     ).format(
-        relation_name=f"`{handler.db_name}`.`{handler.table_name}`"
+        relation_name=_relation
     )
-    _relation = f"`{handler.db_name}`.`{handler.table_name}`"
-    _cleaned_sql = handler.raw_sql_statement.replace("\n", "")
-    _split = _cleaned_sql.split("as select")
 
     # Extract column names from the config
     insert_column_names = models.get(handler.model_name, {}).get(PRE_CREATE_CONFIG_TAG, {}).get(PRE_CREATE_INSERT_COLUMNS_TAG, [])
 
     # Set the object values
-    handler.config_statement = _split[0].split(f"{_relation}")[1]
+    handler.config_statement = _clean_split[0].split(f"{_relation}")[1]
     handler.create_statement = _create_statement + handler.config_statement
-    handler.insert_statement = f"insert into {_relation} ({','.join(insert_column_names)}) select {_split[1]}"
+    handler.insert_statement = f"insert into {_relation} ({','.join(insert_column_names)}) select {_clean_split[1]}"
 
     return handler

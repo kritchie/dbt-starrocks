@@ -16,6 +16,7 @@ import re
 import time
 import uuid
 from concurrent.futures import Future
+from functools import partial
 from typing import Callable, Dict, List, Optional, Set, FrozenSet, Tuple, TypeAlias
 
 import agate
@@ -36,7 +37,7 @@ from dbt.adapters.starrocks.column import StarRocksColumn
 from dbt.adapters.starrocks.connections import StarRocksConnectionManager
 from dbt.adapters.starrocks.helpers.pre_create import (
     PreCreateSQLHandler,
-    create_pre_create_handler,
+    create_handler,
     is_pre_creatable,
 )
 from dbt.adapters.starrocks.relation import StarRocksRelation
@@ -173,36 +174,47 @@ class StarRocksAdapter(SQLAdapter):
         """
         _task_id = str(uuid.uuid4()).replace('-', '')
         _timeout = self.config.credentials.async_query_timeout
+        _run_sql = partial(super().execute, auto_begin, fetch, limit)
 
+        _submit_statement = sql
         if pre_create_handler:
             logger.info(f"Pre-creating table `{pre_create_handler.db_name}`.`{pre_create_handler.table_name}`...")
-            super().execute(
-                sql=pre_create_handler.create_statement,
-                auto_begin=auto_begin,
-                fetch=fetch,
-                limit=limit
-            )
+            _run_sql(sql=pre_create_handler.create_statement)
+            _submit_statement = pre_create_handler.insert_statement
 
-            _submit_sql = SUBMIT_TASK_TEMPLATE.format(
-                timeout=_timeout,
-                task_id=_task_id,
-                sql=pre_create_handler.insert_statement,
-            )
-        else:
-            # No pre-create, execute as usual
-            _submit_sql = SUBMIT_TASK_TEMPLATE.format(
-                timeout=_timeout,
-                task_id=_task_id,
-                sql=sql,
-            )
-
-        super().execute(
-            sql=_submit_sql,
-            auto_begin=auto_begin,
-            fetch=fetch,
-            limit=limit
-        )
+        _submit_sql = SUBMIT_TASK_TEMPLATE.format(timeout=_timeout, task_id=_task_id, sql=_submit_statement)
+        _run_sql(sql=_submit_sql)
         return self._poll_for_complete_task(_task_id)
+
+    def _execute_sync_task(
+        self,
+        sql: str,
+        auto_begin: bool = False,
+        fetch: bool = False,
+        limit: Optional[int] = None,
+        pre_create_handler: Optional[PreCreateSQLHandler] = None
+    ):
+        """
+      Executes an SQL statement synchronously. (Connection is maintained)
+
+        :param str sql: The sql to execute.
+        :param bool auto_begin: If set, and dbt is not currently inside a
+            transaction, automatically begin one.
+        :param bool fetch: If set, fetch results.
+        :param Optional[int] limit: If set, only fetch n number of rows
+        :return: A tuple of the query status and results (empty if fetch=False).
+        :rtype: Tuple[AdapterResponse, "agate.Table"]
+        """
+        _run_sql = partial(super().execute, auto_begin=auto_begin, fetch=fetch, limit=limit)
+
+        # Sync process
+        if pre_create_handler:
+            # Create table and Insert separated in 2 steps.
+            _run_sql(sql=pre_create_handler.create_statement)
+            return _run_sql(sql=pre_create_handler.insert_statement)
+
+        else:
+            return _run_sql(sql=sql)
 
     @override
     def execute(
@@ -229,30 +241,22 @@ class StarRocksAdapter(SQLAdapter):
         :return: A tuple of the query status and results (empty if fetch=False).
         :rtype: Tuple[AdapterResponse, "agate.Table"]
         """
-        pc_handler = create_pre_create_handler(
+        pc_handler = create_handler(
             sql=sql,
             project_root=self.config.project_root,
             model_paths=self.config.model_paths,
             models=self.config.models,
         ) if is_pre_creatable(sql=sql) else None
 
-        if not self.config.credentials.is_async or not self._is_submittable_etl(sql):
-            # Sync process
-            if pc_handler:
-                # Create table and Insert separated in 2 steps.
-                super().execute(sql=pc_handler.create_statement, auto_begin=auto_begin, fetch=fetch, limit=limit)
-                return super().execute(sql=pc_handler.insert_statement, auto_begin=auto_begin, fetch=fetch, limit=limit)
+        _is_async = not self.config.credentials.is_async or not self._is_submittable_etl(sql)
+        _exec_fct: Callable = self._execute_sync_task if _is_async else self._execute_async_task
 
-            else:
-                return super().execute(sql=sql, auto_begin=auto_begin, fetch=fetch, limit=limit)
-
-        # Async process
-        return self._execute_async_task(
+        return _exec_fct(
             sql=sql,
             auto_begin=auto_begin,
             fetch=fetch,
             limit=limit,
-            pre_create_handler=pc_handler
+            pre_create_handler=pc_handler,
         )
 
     @classmethod

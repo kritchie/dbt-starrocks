@@ -2,6 +2,8 @@ import pytest
 
 from dbt.tests.util import run_dbt, run_dbt_and_capture, check_relations_equal, relation_from_name
 
+from dbt.adapters.starrocks.helpers.pre_create import create_handler
+
 seed_a_csv = """
 id,value
 1,a
@@ -91,7 +93,43 @@ class TestSubmitTaskModel:
         catalog = run_dbt(["docs", "generate"])
         assert len(catalog.nodes) == len(self._seeds()) + 1
 
-    def test_split_create_insert_task(self, project):
+
+    def test_create_handler(self, project):
+        def clean(s: str) -> str:
+            return s.replace("\n", "").replace(" ", "")
+
+        handler = create_handler(
+            sql="""
+            create table if not exists `doesntmatter`.`model_a__dbt_tmp`
+            DISTRIBUTED BY (`key`)
+            BUCKETS 5
+            PROPERTIES ("foo" = "bar", "alice": "bob")   
+            as select  * from `doesntmatter`.`seed_a`"
+            """,
+            project_root=project.adapter.config.project_root,
+            model_paths=project.adapter.config.model_paths,
+            models=project.adapter.config.models,
+        )
+        assert handler.model_name == "model_a"
+        assert handler.table_name == "model_a__dbt_tmp"
+        assert clean(handler.config_statement) == clean(
+            'DISTRIBUTED BY (`key`) BUCKETS 5 PROPERTIES ("foo" = "bar", "alice": "bob")'
+        )
+        assert clean(handler.create_statement) == clean("""
+            create table if not exists `doesntmatter`.`model_a__dbt_tmp` (
+                id BIGINT,
+                value VARCHAR(5),
+                uid BIGINT AUTO_INCREMENT
+            )
+            DISTRIBUTED BY (`key`)            
+            BUCKETS 5            
+            PROPERTIES ("foo" = "bar", "alice": "bob")
+            """)
+        assert clean(handler.insert_statement) == clean(
+            'insert into `doesntmatter`.`model_a__dbt_tmp` (id,value) select * from `doesntmatter`.`seed_a`"'
+        )
+
+    def test_pre_create_dbt_run(self, project):
         self._seed_assertions(project=project)
 
         results, stdout = run_dbt_and_capture(["run", "--select", "model_a"])

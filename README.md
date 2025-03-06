@@ -78,7 +78,6 @@ starrocks:
 
 More details about setting `use_pure` and other connection arguments [here](https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html)
 
-More details about the use of `is_async` [here](#submittable-etl-tasks)
 
 ## Example
 
@@ -99,7 +98,7 @@ models:
   // Expr partition type requires an expression (e.g., date_trunc) specified in partition_by
   order_by: ['some_column']             // only for PRIMARY table_type
   partition_type: 'RANGE'               // RANGE or LIST or Expr Need to be used in combination with partition_by configuration
-  properties: [{"replication_num":"1", "in_memory": "true"}]
+  properties: {"replication_num":"1", "in_memory": "true"}
   refresh_method: 'async'               // only for materialized view default manual
   
   // For 'materialized=incremental' in version >= 3.4

@@ -174,7 +174,7 @@ class StarRocksAdapter(SQLAdapter):
         """
         _task_id = str(uuid.uuid4()).replace('-', '')
         _timeout = self.config.credentials.async_query_timeout
-        _run_sql = partial(super().execute, auto_begin, fetch, limit)
+        _run_sql = partial(super().execute, auto_begin=auto_begin, fetch=fetch, limit=limit)
 
         _submit_statement = sql
         if pre_create_handler:

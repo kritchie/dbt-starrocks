@@ -36,7 +36,7 @@ create table if not exists {relation_name} (
 )
 """
 
-class TestSubmitTaskModel:
+class TestPreCreateModel:
 
     @staticmethod
     def _seeds():
@@ -137,3 +137,19 @@ class TestSubmitTaskModel:
         check_relations_equal(project.adapter, ["groundtruth", "model_a"])
 
         self._doc_tests()
+
+
+class TestAsyncPreCreateModel(TestPreCreateModel):
+
+    @staticmethod
+    @pytest.fixture(scope="class")
+    def dbt_profile_target():
+        return {
+            'type': 'starrocks',
+            'username': 'root',
+            'password': '',
+            'port': 9030,
+            'host': 'localhost',
+            'is_async': True,
+            'async_query_timeout': 10,
+        }

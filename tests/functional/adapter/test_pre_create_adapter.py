@@ -100,11 +100,19 @@ class TestPreCreateModel:
 
         pc_adapter = create_adapter(
             sql="""
-            create table if not exists `doesntmatter`.`model_a__dbt_tmp`
-            DISTRIBUTED BY (`key`)
-            BUCKETS 5
-            PROPERTIES ("foo" = "bar", "alice": "bob")   
-            as select  * from `doesntmatter`.`seed_a`"
+             create table `doesntmatter`.`model_a__dbt_tmp`
+    PROPERTIES (
+      "foo" = "bar"
+    )
+  as 
+
+with final as (
+
+    select * from `doesntmatter`.`seed_a`
+
+)
+
+select * from final
             """,
             project_root=project.adapter.config.project_root,
             model_paths=project.adapter.config.model_paths,
@@ -112,21 +120,17 @@ class TestPreCreateModel:
         )
         assert pc_adapter.model_name == "model_a"
         assert pc_adapter.table_name == "model_a__dbt_tmp"
-        assert clean(pc_adapter.config_statement) == clean(
-            'DISTRIBUTED BY (`key`) BUCKETS 5 PROPERTIES ("foo" = "bar", "alice": "bob")'
-        )
+        assert clean(pc_adapter.config_statement) == 'PROPERTIES("foo"="bar")'
         assert clean(pc_adapter.create_statement) == clean("""
             create table if not exists `doesntmatter`.`model_a__dbt_tmp` (
                 id BIGINT,
                 value VARCHAR(5),
                 uid BIGINT AUTO_INCREMENT
-            )
-            DISTRIBUTED BY (`key`)            
-            BUCKETS 5            
-            PROPERTIES ("foo" = "bar", "alice": "bob")
+            )    
+            PROPERTIES ("foo" = "bar")
             """)
         assert clean(pc_adapter.insert_statement) == clean(
-            'insert into `doesntmatter`.`model_a__dbt_tmp` (id,value) select * from `doesntmatter`.`seed_a`"'
+            'insert into `doesntmatter`.`model_a__dbt_tmp` (id,value) as with final as (select * from `doesntmatter`.`seed_a`) select * from final'
         )
 
     def test_pre_create_dbt_run(self, project):

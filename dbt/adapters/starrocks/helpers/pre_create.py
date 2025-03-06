@@ -113,6 +113,26 @@ def is_pre_creatable(sql: str) -> bool:
     return bool(re.search(pre_create_pattern, sql_clean))
 
 
+def split_config_select(sql: str) -> tuple[str, str]:
+    _cleaned = sql.replace("\n", "")
+    if "as select" in _cleaned:
+        _splitter = "as select"
+    elif "as with" in _cleaned:
+        _splitter = "as with"
+    else:
+        raise ValueError("Invalid SQL structure - missing `as select` or `as with` clause")
+
+    _splitted = _cleaned.split(_splitter)
+    if len(_splitted) < 2:
+        raise ValueError("Invalid SQL structure - not enough segments")
+
+    # Re-assemble
+    config_stmt = _splitted[0]
+    select_stmt = f"select {_splitted[1]}" if _splitter == "as select" else f"as with {_splitted[1]}"
+
+    return config_stmt, select_stmt
+
+
 def create_adapter(
     sql: str,
     project_root: str,
@@ -135,9 +155,6 @@ def create_adapter(
     # Parse the SQL
     handler = PreCreateSQLAdapter(raw_sql_statement=sql)
     _relation = f"`{handler.db_name}`.`{handler.table_name}`"
-    _clean_split = handler.raw_sql_statement.replace("\n", "").split("as select")
-    if len(_clean_split) != 2:
-        raise ValueError("Invalid SQL structure - missing `as select` clause")
 
     if not models.get(handler.model_name, {}).get(PRE_CREATE_CONFIG_TAG):
         # We don't need to pre-create, the `pre_create` setting was not set.
@@ -155,8 +172,9 @@ def create_adapter(
     insert_column_names = models.get(handler.model_name, {}).get(PRE_CREATE_CONFIG_TAG, {}).get(PRE_CREATE_INSERT_COLUMNS_TAG, [])
 
     # Set the object values
-    handler.config_statement = _clean_split[0].split(f"{_relation}")[1]
+    config_split, select_split = split_config_select(sql=handler.raw_sql_statement)
+    handler.config_statement = config_split.split(f"{_relation}")[1]
     handler.create_statement = _create_statement + handler.config_statement
-    handler.insert_statement = f"insert into {_relation} ({','.join(insert_column_names)}) select {_clean_split[1]}"
+    handler.insert_statement = f"insert into {_relation} ({','.join(insert_column_names)}) {select_split}"
 
     return handler

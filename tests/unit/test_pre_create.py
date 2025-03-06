@@ -89,7 +89,7 @@ final as (
 
 select * from final"""
     ])
-    def test__is_pre_creatable(self, sql):
+    def test_is_pre_creatable(self, sql):
         assert is_pre_creatable(sql) == True
 
     @pytest.mark.parametrize("sql", [
@@ -152,5 +152,5 @@ FROM `renamed`
       "replication_num" = "1"
     )""",
     ])
-    def test__is_not_pre_creatable(self, sql):
+    def test_is_not_pre_creatable(self, sql):
         assert is_pre_creatable(sql) == False

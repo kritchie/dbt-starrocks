@@ -2,7 +2,7 @@ import pytest
 
 from dbt.tests.util import run_dbt, run_dbt_and_capture, check_relations_equal, relation_from_name
 
-from dbt.adapters.starrocks.helpers.pre_create import create_handler
+from dbt.adapters.starrocks.helpers.pre_create import create_adapter
 
 seed_a_csv = """
 id,value
@@ -94,11 +94,11 @@ class TestPreCreateModel:
         assert len(catalog.nodes) == len(self._seeds()) + 1
 
 
-    def test_create_handler(self, project):
+    def test_create_adapter(self, project):
         def clean(s: str) -> str:
             return s.replace("\n", "").replace(" ", "")
 
-        handler = create_handler(
+        pc_adapter = create_adapter(
             sql="""
             create table if not exists `doesntmatter`.`model_a__dbt_tmp`
             DISTRIBUTED BY (`key`)
@@ -110,12 +110,12 @@ class TestPreCreateModel:
             model_paths=project.adapter.config.model_paths,
             models=project.adapter.config.models,
         )
-        assert handler.model_name == "model_a"
-        assert handler.table_name == "model_a__dbt_tmp"
-        assert clean(handler.config_statement) == clean(
+        assert pc_adapter.model_name == "model_a"
+        assert pc_adapter.table_name == "model_a__dbt_tmp"
+        assert clean(pc_adapter.config_statement) == clean(
             'DISTRIBUTED BY (`key`) BUCKETS 5 PROPERTIES ("foo" = "bar", "alice": "bob")'
         )
-        assert clean(handler.create_statement) == clean("""
+        assert clean(pc_adapter.create_statement) == clean("""
             create table if not exists `doesntmatter`.`model_a__dbt_tmp` (
                 id BIGINT,
                 value VARCHAR(5),
@@ -125,7 +125,7 @@ class TestPreCreateModel:
             BUCKETS 5            
             PROPERTIES ("foo" = "bar", "alice": "bob")
             """)
-        assert clean(handler.insert_statement) == clean(
+        assert clean(pc_adapter.insert_statement) == clean(
             'insert into `doesntmatter`.`model_a__dbt_tmp` (id,value) select * from `doesntmatter`.`seed_a`"'
         )
 

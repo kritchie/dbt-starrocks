@@ -13,7 +13,7 @@ PRE_CREATE_TEMPLATE_PREFIX = "template_"
 
 
 @dataclasses.dataclass
-class PreCreateSQLHandler:
+class PreCreateSQLAdapter:
     raw_sql_statement: str
     create_statement: Optional[str] = None
     config_statement: Optional[str] = None
@@ -52,7 +52,7 @@ class PreCreateSQLHandler:
         self.db_name, self.table_name = self._get_relations_from_sql(self.raw_sql_statement)
 
 
-def load_create_table_statement(project_root: str, model_paths: list[str], model_file: str) -> str:
+def load_create_table_statement(project_root: str, model_paths: list[str], model_file: str, relation_name: str) -> str:
     """
     Loads the `CREATE TABLE` SQL statement from a predefined file.
 
@@ -74,13 +74,19 @@ def load_create_table_statement(project_root: str, model_paths: list[str], model
     :param project_root: The root directory of the dbt project.
     :param model_paths: A list of paths (relative to the project root) where dbt models are located.
     :param model_file: The filename of the dbt model for which to load the pre-create SQL statement.
+    :param relation_name: The relation name (db + table) to inject inside the SQL statement.
     :return: The SQL query loaded from the file.
     :raises dbt.exceptions.DbtRuntimeError: If no matching SQL file is found.
     """
     for mp in model_paths:
         _fp = pathlib.Path(project_root) / mp / PRE_CREATE_MODEL_DIR / f"{PRE_CREATE_TEMPLATE_PREFIX}{model_file}"
         if _fp.exists():
-            return _fp.read_text()
+            _statement = _fp.read_text()
+            if "{relation_name}" not in _statement:
+                raise ValueError(
+                    f"You Pre-Create SQL statement must use the '{{relation_name}}' placeholder as the table relation."
+                )
+            return _statement.format(relation_name=relation_name)
     raise DbtRuntimeError(
         "Could not find table pre-creation SQL code for the following configuration: "
         f"project_root=[{project_root}], model_paths=[{model_paths}], model_file=[{model_file}]"
@@ -107,34 +113,41 @@ def is_pre_creatable(sql: str) -> bool:
     return bool(re.search(pre_create_pattern, sql_clean))
 
 
-def create_handler(
+def create_adapter(
     sql: str,
     project_root: str,
     model_paths: list[str],
     models: dict,
-) -> PreCreateSQLHandler:
+) -> Optional[PreCreateSQLAdapter]:
     """
-    Creates a SQL handler for pre-create operations.
+    Creates a SQL adapter for pre-create operations.
 
     :param sql: The raw SQL statement to process.
     :param project_root: The root directory of the dbt project.
     :param model_paths: A list of paths (relative to the project root) where dbt models are located.
     :param models: The configuration object of the dbt models.
-    :return: Configured PreCreateSQLHandler instance.
+    :return: Configured PreCreateSQLAdapter instance.
     """
+    if not is_pre_creatable(sql=sql):
+        # We don't need to pre-create, it's not a suitable SQL statement.
+        return None
+
     # Parse the SQL
-    handler = PreCreateSQLHandler(raw_sql_statement=sql)
+    handler = PreCreateSQLAdapter(raw_sql_statement=sql)
     _relation = f"`{handler.db_name}`.`{handler.table_name}`"
     _clean_split = handler.raw_sql_statement.replace("\n", "").split("as select")
     if len(_clean_split) != 2:
         raise ValueError("Invalid SQL structure - missing `as select` clause")
 
+    if not models.get(handler.model_name, {}).get(PRE_CREATE_CONFIG_TAG):
+        # We don't need to pre-create, the `pre_create` setting was not set.
+        return None
+
     # Prepare the SQL queries
     _create_statement = load_create_table_statement(
         project_root=project_root,
         model_paths=model_paths,
-        model_file=f"{handler.model_name}.sql"
-    ).format(
+        model_file=f"{handler.model_name}.sql",
         relation_name=_relation
     )
 

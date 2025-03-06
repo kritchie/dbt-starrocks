@@ -36,8 +36,8 @@ from typing_extensions import override
 from dbt.adapters.starrocks.column import StarRocksColumn
 from dbt.adapters.starrocks.connections import StarRocksConnectionManager
 from dbt.adapters.starrocks.helpers.pre_create import (
-    PreCreateSQLHandler,
-    create_handler,
+    PreCreateSQLAdapter,
+    create_adapter,
     is_pre_creatable,
 )
 from dbt.adapters.starrocks.relation import StarRocksRelation
@@ -159,7 +159,7 @@ class StarRocksAdapter(SQLAdapter):
             auto_begin: bool = False,
             fetch: bool = False,
             limit: Optional[int] = None,
-            pre_create_handler: Optional[PreCreateSQLHandler] = None
+            pre_create_handler: Optional[PreCreateSQLAdapter] = None
     ) -> SQLQueryResult:
         """
         Executes an SQL statement asynchronously and wait for completion.
@@ -192,7 +192,7 @@ class StarRocksAdapter(SQLAdapter):
         auto_begin: bool = False,
         fetch: bool = False,
         limit: Optional[int] = None,
-        pre_create_handler: Optional[PreCreateSQLHandler] = None
+        pre_create_handler: Optional[PreCreateSQLAdapter] = None
     ):
         """
       Executes an SQL statement synchronously. (Connection is maintained)
@@ -241,12 +241,12 @@ class StarRocksAdapter(SQLAdapter):
         :return: A tuple of the query status and results (empty if fetch=False).
         :rtype: Tuple[AdapterResponse, "agate.Table"]
         """
-        pc_handler = create_handler(
+        pc_handler = create_adapter(
             sql=sql,
             project_root=self.config.project_root,
             model_paths=self.config.model_paths,
             models=self.config.models,
-        ) if is_pre_creatable(sql=sql) else None
+        )
 
         _is_async = not self.config.credentials.is_async or not self._is_submittable_etl(sql)
         _exec_fct: Callable = self._execute_sync_task if _is_async else self._execute_async_task

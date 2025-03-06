@@ -203,6 +203,41 @@ my_profile:
       async_query_timeout: 3600 # 1 hour
 ```
 
+## Table pre-creation
+
+Table pre-creation is useful for the following scenarios:
+
+- Setting `AUTO_INCREMENT` columns.
+- Setting explicit column data types. 
+
+`dbt run` doesn't support table pre-creation by default. This feature was added specially to enable specific StarRocks features. 
+
+To configure tables for pre-creation, you need to do the following 3 things:
+
+1. Add the `+pre_create` configuration in your `dbt_project.yml` (This won't work if you set this up through Jinja config)
+
+Example `dbt_project.yml`:
+
+```yaml
+Todo
+```
+
+2. Add a `pre_create` directory in your models directory with the pre-creation SQL statements.
+
+Example `dbt` project structure with `pre_create` directory:
+
+```
+Todo
+```
+
+3. Make sure your pre-creation SQL statements contains the `{relation_name}` placeholder as the relation name. (E.g. `create table {relation_name} ...`)
+
+Example pre-creation `.sql` file:
+
+```sql
+Todo
+```
+
 ## Test Adapter
 Run the following
 ```

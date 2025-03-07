@@ -26,8 +26,7 @@ model_a_with_props_csv = """
         materialized='table',
         properties={
             'compression': 'LZ4',
-            'replication_num': '3',
-            'colocate_with': 'cg'
+            'replication_num': '1',
         }
     ) 
 }}

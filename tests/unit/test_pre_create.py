@@ -70,6 +70,7 @@ select * from final"""
             ')'
             'select * from final'
         )
+
     @pytest.mark.parametrize("sql", [
         # DBT-like statements
         """select

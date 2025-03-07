@@ -6,9 +6,8 @@ from typing import Optional
 from dbt.exceptions import DbtRuntimeError
 
 
-PRE_CREATE_CONFIG_TAG = "+pre_create"
 PRE_CREATE_INSERT_COLUMNS_TAG = "insert_columns"
-PRE_CREATE_MODEL_DIR = "pre_create"
+PRE_CREATE_MODEL = "pre_create"
 PRE_CREATE_TEMPLATE_PREFIX = "template_"
 
 
@@ -79,7 +78,7 @@ def load_create_table_statement(project_root: str, model_paths: list[str], model
     :raises dbt.exceptions.DbtRuntimeError: If no matching SQL file is found.
     """
     for mp in model_paths:
-        _fp = pathlib.Path(project_root) / mp / PRE_CREATE_MODEL_DIR / f"{PRE_CREATE_TEMPLATE_PREFIX}{model_file}"
+        _fp = pathlib.Path(project_root) / mp / PRE_CREATE_MODEL / f"{PRE_CREATE_TEMPLATE_PREFIX}{model_file}"
         if _fp.exists():
             _statement = _fp.read_text()
             if "{relation_name}" not in _statement:
@@ -128,7 +127,7 @@ def split_config_select(sql: str) -> tuple[str, str]:
 
     # Re-assemble
     config_stmt = _splitted[0]
-    select_stmt = f"select {_splitted[1]}" if _splitter == "as select" else f"as with {_splitted[1]}"
+    select_stmt = f"select {_splitted[1]}" if _splitter == "as select" else f"(with {_splitted[1]})"
 
     return config_stmt, select_stmt
 
@@ -156,7 +155,7 @@ def create_adapter(
     handler = PreCreateSQLAdapter(raw_sql_statement=sql)
     _relation = f"`{handler.db_name}`.`{handler.table_name}`"
 
-    if not models.get(handler.model_name, {}).get(PRE_CREATE_CONFIG_TAG):
+    if not models.get(PRE_CREATE_MODEL, {}).get(handler.model_name, {}):
         # We don't need to pre-create, the `pre_create` setting was not set.
         return None
 
@@ -169,7 +168,7 @@ def create_adapter(
     )
 
     # Extract column names from the config
-    insert_column_names = models.get(handler.model_name, {}).get(PRE_CREATE_CONFIG_TAG, {}).get(PRE_CREATE_INSERT_COLUMNS_TAG, [])
+    insert_column_names = models.get(PRE_CREATE_MODEL, {}).get(handler.model_name, {}).get(PRE_CREATE_INSERT_COLUMNS_TAG, [])
 
     # Set the object values
     config_split, select_split = split_config_select(sql=handler.raw_sql_statement)

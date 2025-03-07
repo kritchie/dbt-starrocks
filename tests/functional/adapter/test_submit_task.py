@@ -13,7 +13,24 @@ id,value
 """.lstrip()
 
 model_a_csv = """
-{{ config(materialized='table') }}
+{{ 
+    config(materialized='table') 
+}}
+
+select *, SLEEP(1) from {{ ref('seed_a') }}
+""".lstrip()
+
+model_a_with_props_csv = """
+{{ 
+    config(
+        materialized='table',
+        properties={
+            'compression': 'LZ4',
+            'replication_num': '3',
+            'colocate_with': 'cg'
+        }
+    ) 
+}}
 
 select *, SLEEP(1) from {{ ref('seed_a') }}
 """.lstrip()
@@ -52,6 +69,62 @@ class TestSubmitTaskModel:
     def models(self):
         return {
             "model_a.sql": model_a_csv,
+        }
+
+    def _seed_assertions(self, project):
+        _seeds_row_counts = [
+            ("seed_a", 5),
+        ]
+
+        # seed command
+        results = run_dbt(["seed"])
+        assert len(results) == len(_seeds_row_counts)
+
+        # Make sure seeds are properly setup
+        for pname, pcount in _seeds_row_counts:
+            relation = relation_from_name(project.adapter, f"{pname}")
+            result = project.run_sql(f"select count(*) as num_rows from {relation}", fetch="one")
+            assert result[0] == pcount
+
+
+    def _doc_tests(self):
+        # get catalog from docs generate
+        catalog = run_dbt(["docs", "generate"])
+        assert len(catalog.nodes) == len(self._seeds()) + 1
+
+    def test_submit_task(self, project):
+        self._seed_assertions(project=project)
+
+        results, stdout = run_dbt_and_capture(["run", "--select", "model_a"])
+        assert len(results) == 1
+        assert "Waiting 4 seconds..." in stdout
+        check_relations_equal(project.adapter, ["seed_a", "model_a"])
+
+        self._doc_tests()
+
+
+class TestSubmitTaskWithPropsModel:
+
+    @staticmethod
+    def _seeds():
+        return {
+            "seed_a.csv": seed_a_csv,
+        }
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "test_submit_task",
+        }
+
+    @pytest.fixture(scope="class")
+    def seeds(self):
+        return self._seeds()
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "model_a.sql": model_a_with_props_csv,
         }
 
     def _seed_assertions(self, project):

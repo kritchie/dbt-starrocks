@@ -214,28 +214,53 @@ Table pre-creation is useful for the following scenarios:
 
 To configure tables for pre-creation, you need to do the following 3 things:
 
-1. Add the `+pre_create` configuration in your `dbt_project.yml` (This won't work if you set this up through Jinja config)
+1. Add the `pre_create` configuration in your `dbt_project.yml` (This won't work if you set this up through Jinja config)
 
 Example `dbt_project.yml`:
-
 ```yaml
-Todo
+models:
+  # Set this at the top level of models
+  pre_create:
+    # Each model needing pre-creation should be declared separately
+    1000g_locus_lookup:
+      # Put each columns, you want to include in the `insert` statement here
+      insert_columns:
+        - locus
+  
+  my_domain:
+    # Add this in your domain configuration
+    pre_create:
+      # Disable the `pre_create` directory to prevent dbt from trying to create those models
+      +enabled: false
 ```
 
 2. Add a `pre_create` directory in your models directory with the pre-creation SQL statements.
 
-Example `dbt` project structure with `pre_create` directory:
+**Each pre-creation `.sql` file should be prefixed with `template_`**
 
+Example `dbt` project structure with `pre_create` directory:
 ```
-Todo
+dbt/
+   macros/
+   models/
+        customers/
+        pre_create/
+            template_model_a.sql
+            template_model_b.sql
+            ...
+        schema.yml
+    tests/
+    ...
 ```
 
 3. Make sure your pre-creation SQL statements contains the `{relation_name}` placeholder as the relation name. (E.g. `create table {relation_name} ...`)
 
 Example pre-creation `.sql` file:
-
 ```sql
-Todo
+create table {relation_name} (
+    id BIGINT AUTO_INCREMENT,
+    value VARCHAR(64)
+)
 ```
 
 ## Test Adapter

@@ -222,7 +222,7 @@ models:
   # Set this at the top level of models
   pre_create:
     # Each model needing pre-creation should be declared separately
-    1000g_locus_lookup:
+    my_model_to_pre_create:
       # Put each columns, you want to include in the `insert` statement here
       insert_columns:
         - locus

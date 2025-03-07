@@ -78,6 +78,7 @@ starrocks:
 
 More details about setting `use_pure` and other connection arguments [here](https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html)
 
+More details about the use of `is_async` [here](#submittable-etl-tasks)
 
 ## Example
 
@@ -200,6 +201,66 @@ my_profile:
       password: password
       is_async: true
       async_query_timeout: 3600 # 1 hour
+```
+
+## Table pre-creation
+
+Table pre-creation is useful for the following scenarios:
+
+- Setting `AUTO_INCREMENT` columns.
+- Setting explicit column data types. 
+
+`dbt run` doesn't support table pre-creation by default. This feature was added specially to enable specific StarRocks features. 
+
+To configure tables for pre-creation, you need to do the following 3 things:
+
+1. Add the `pre_create` configuration in your `dbt_project.yml` (This won't work if you set this up through Jinja config)
+
+Example `dbt_project.yml`:
+```yaml
+models:
+  # Set this at the top level of models
+  pre_create:
+    # Each model needing pre-creation should be declared separately
+    my_model_to_pre_create:
+      # Put each columns, you want to include in the `insert` statement here
+      insert_columns:
+        - locus
+  
+  my_domain:
+    # Add this in your domain configuration
+    pre_create:
+      # Disable the `pre_create` directory to prevent dbt from trying to create those models
+      +enabled: false
+```
+
+2. Add a `pre_create` directory in your models directory with the pre-creation SQL statements.
+
+**Each pre-creation `.sql` file should be prefixed with `template_`**
+
+Example `dbt` project structure with `pre_create` directory:
+```
+dbt/
+   macros/
+   models/
+        customers/
+        pre_create/
+            template_model_a.sql
+            template_model_b.sql
+            ...
+        schema.yml
+    tests/
+    ...
+```
+
+3. Make sure your pre-creation SQL statements contains the `{relation_name}` placeholder as the relation name. (E.g. `create table {relation_name} ...`)
+
+Example pre-creation `.sql` file:
+```sql
+create table {relation_name} (
+    id BIGINT AUTO_INCREMENT,
+    value VARCHAR(64)
+)
 ```
 
 ## Test Adapter

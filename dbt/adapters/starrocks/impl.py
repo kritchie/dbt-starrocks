@@ -47,7 +47,7 @@ logger = AdapterLogger("starrocks")
 
 SQLQueryResult: TypeAlias = Tuple[AdapterResponse, "agate.Table"]
 
-MAX_POLL_DELAY = 600  # 10 minutes
+POLL_DELAY = 30  # 30 seconds
 SUBMIT_TASK_TEMPLATE = "submit /*+set_var(query_timeout={timeout})*/ task {task_id} as {sql}"
 POLL_TASK_TEMPLATE = "select * from information_schema.task_runs where task_name = '{task_id}'"
 
@@ -141,17 +141,15 @@ class StarRocksAdapter(SQLAdapter):
                 logger.info(f"Task [{task_id}] finished with status [{status}]")
                 return response, table
 
-            # Compute next delay
-            poll_delay = min(MAX_POLL_DELAY, 2 ** _attempts)
             _attempts += 1
-
-            # Notify end user
-            progress = table[0].get("PROGRESS", "unknown")
-            logger.info(f"Task {task_id} progress [{progress}]. Waiting {poll_delay} seconds...")
+            # Notify end user every 10 attempts
+            if _attempts % 10 == 0:
+                progress = table[0].get("PROGRESS", "unknown")
+                logger.info(f"Task {task_id} progress [{progress}]...")
 
             # Close connection before sleeping to avoid stale connections
             self.connections.close(_connection)
-            time.sleep(poll_delay)
+            time.sleep(POLL_DELAY)
 
     def _execute_async_task(
             self,
